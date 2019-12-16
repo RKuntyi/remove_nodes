@@ -1,0 +1,11 @@
+name = Remove Nodes
+description = This module will help to remove old nodes.
+core = 7.x
+package = Custom
+php = 5.5
+dependencies[] = elements
+files[] = remove_nodes.test
+configure = admin/config/content/remove_nodes
+
+version = "7.x-1.x-dev"
+core = "7.x"

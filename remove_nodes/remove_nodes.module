@@ -1,0 +1,197 @@
+<?php
+
+/**
+ * @file
+ * Module file for remove_nodes.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function remove_nodes_menu() {
+  $items['admin/config/content/remove_nodes'] = [
+    'title' => 'Remove nodes',
+    'description' => 'Settings form with email and hour count per content type',
+    'position' => 'left',
+    'weight' => -20,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['remove_nodes_form'],
+    'file' => 'remove_nodes_form.inc',
+    'type' => MENU_NORMAL_ITEM,
+    'access arguments' => ['administer remove-nodes']
+  ];
+
+  $items['admin/config/content/remove_nodes/manually'] = [
+    'title' => 'Remove nodes manually',
+    'position' => 'left',
+    'weight' => -20,
+    'page callback' => 'remove_nodes_manually',
+    'type' => MENU_SUGGESTED_ITEM,
+    'access arguments' => ['administer remove-nodes']
+  ];
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function remove_nodes_permission() {
+  $permissions = [
+    'administer remove-nodes' => [
+      'title' => t('Administer remove_nodes'),
+    ]
+  ];
+
+  return $permissions;
+}
+
+/**
+ * Implements hook_cron().
+ */
+function remove_nodes_cron() {
+  if (time() >= variable_get('remove_nodes_cron_next_execution', 0)) {
+    $language = language_default();
+    $settings = variable_get('remove_nodes');
+    $to = empty($settings['email']) ? 'admin@example.com' : $settings['email'];
+    $from = variable_get('site_mail', 'admin@example.com');
+    $result = drupal_mail('remove_nodes', 'main', $to, $language, [], $from, $send = TRUE);
+    variable_set('remove_nodes_cron_next_execution', time() + 3600);
+    if ($result['result'] == TRUE) {
+      drupal_set_message(t('Your message has been sent.'));
+    }
+    else {
+      drupal_set_message(t('There was a problem sending your message and it was not sent.'), 'error');
+    }
+  }
+}
+
+/**
+ * Implements hook_mail().
+ */
+function remove_nodes_mail($key, &$message) {
+  switch ($key) {
+    case 'main':
+      global $base_url;
+      $message['html'] = TRUE;
+      $message['headers']['Content-Type'] = 'text/html; charset=UTF-8;';
+      $message['headers']['Return-Path'] = variable_get('site_mail', 'admin@example.com');
+      $nodes = remove_nodes_get_node_list();
+      $link = url($base_url . '/admin/config/content/remove_nodes/manually');
+      $message['subject'] = t('Nodes that will be removed');
+      $nodes = theme_item_list(['items' => $nodes, 'title' => NULL, 'type' => 'li', 'attributes' => []]);
+      $message['body'][] = t('The following nodes(nid) will be removed: @nodes,', ['@nodes' => $nodes]);
+      $message['body'][] = t('To remove nodes please follow the link: @link', ['@link' => $link]);
+      break;
+  }
+}
+
+function remove_nodes_manually() {
+  $_SESSION['http_request_count'] = 0;
+
+  $nodes = remove_nodes_get_node_list();
+  drupal_set_message(t('@num will be removed.', ['@num' => count($nodes)]));
+
+  $operations = [];
+  foreach ($nodes as $node) {
+    $operations[] = [
+      'remove_nodes_remove_single_node',
+      [
+        $node,
+        t('(Removing node with ID: @operation)', ['@operation' => $node]),
+      ],
+    ];
+  }
+
+  $batch = [
+    'operations' => $operations,
+    'finished' => 'remove_nodes_finished',
+  ];
+  batch_set($batch);
+
+  // Redirect when all batch operations will be finished.
+  batch_process('admin/config/content/remove_nodes');
+}
+
+/**
+ * Batch operation: remove single node.
+ *
+ * This is the function that is called on each operation.
+ */
+function remove_nodes_remove_single_node($nid, $operation_details, &$context) {
+  if (isset($nid)) {
+    $node = node_load($nid, NULL, TRUE);
+    $context['results'][] = $node->nid . ' : ' . check_plain($node->title);
+    node_delete($nid);
+    $context['message'] = t('Loading node "@title"', ['@title' => $node->title]) . ' ' . $operation_details;
+
+    _remove_nodes_update_http_requests();
+  }
+}
+
+/**
+ * Utility function to increment HTTP requests in a session variable.
+ */
+function _remove_nodes_update_http_requests() {
+  $_SESSION['http_request_count']++;
+}
+
+/**
+ * Batch 'finished' callback.
+ */
+function remove_nodes_finished($success, $results, $operations) {
+  if ($success) {
+    drupal_set_message(t('@count nodes was removed.', ['@count' => count($results)]));
+  }
+  else {
+    // An error occurred.
+    $error_operation = reset($operations);
+    drupal_set_message(
+      t('An error occurred while processing @operation with arguments : @args',
+        [
+          '@operation' => $error_operation[0],
+          '@args' => print_r($error_operation[0], TRUE),
+        ]
+      ),
+      'error'
+    );
+  }
+}
+
+/**
+ * Utility function to count the HTTP requests in a session variable.
+ *
+ * @return int
+ *   Number of requests.
+ */
+function _remove_nodes_get_http_requests() {
+  return !empty($_SESSION['http_request_count']) ? $_SESSION['http_request_count'] : 0;
+}
+
+/**
+ * Main function to get list of nodes that should be deleted.
+ */
+function remove_nodes_get_node_list() {
+  $nodes = [];
+  // Get settings.
+  $saved_settings = variable_get('remove_nodes', FALSE);
+  if ($saved_settings) {
+    unset($saved_settings['email']);
+    foreach ($saved_settings as $content_type => $life_time) {
+      if ($life_time['hours'] != 0) {
+        $query = new EntityFieldQuery;
+        $result = $query->entityCondition('entity_type', 'node')
+          ->entityCondition('bundle', $content_type)
+          ->propertyCondition('created', time() - $life_time['hours'] * 3600, '<=')
+          ->execute();
+        $nids = [];
+        if (!empty($result['node'])) {
+          $nids = array_keys($result['node']);
+        }
+        $nodes = array_merge($nodes, $nids);
+      }
+    }
+  }
+
+  return $nodes;
+}

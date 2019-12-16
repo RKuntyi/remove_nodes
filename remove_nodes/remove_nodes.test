@@ -1,0 +1,121 @@
+<?php
+/**
+ * @file
+ * Test case for Testing the batch example module.
+ *
+ * This file contains the test cases to check if module is performing as
+ * expected.
+ */
+
+/**
+ * Functional tests for the Batch Example module.
+ *
+ * @ingroup batch_example
+ */
+class RemoveNodesTestCase extends DrupalWebTestCase {
+  protected $webUser;
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function getInfo() {
+    return array(
+      'name' => 'Remove nodes testing functionality',
+      'description' => 'Verifying  for settings form, email sending, nodes deletion.',
+      'group' => 'Remove nodes',
+    );
+  }
+
+  /**
+   * Enable modules and create user with specific permissions.
+   */
+  public function setUp() {
+    // Enable remove_nodes module.
+    parent::setUp(['remove_nodes', 'elements']);
+  }
+
+  /**
+   * Login user, create 30 nodes and test both batch examples.
+   */
+  public function testRemoveNodesBasic() {
+    // Create/login user.
+    $this->webUser = $this->drupalCreateUser(['administer remove-nodes', 'administer nodes', 'administer content types']);
+    $this->drupalLogin($this->webUser);
+
+    // Create custom content type.
+    $content_type = $this->drupalCreateContentType();
+    $type = $content_type->type;
+
+    // Check if we can edit it.
+    $this->drupalGet('admin/structure/types/manage/' . $type);
+    $this->assertResponse(200);
+
+
+
+    // Retrieves main settings page.
+    $this->drupalGet('admin/config/content/remove_nodes');
+
+    // Save empty form.
+    $post = [];
+    $result = $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('Email field is required.'), t('Form submitted: empty email.'));
+
+    // Check invalid email validation.
+    $post['fieldset[email]'] = $this->randomName();
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('Please enter a valid email address.'), t('Form submitted: invalid email.'));
+
+
+
+    // Check invalid hours field validation.
+    $field = 'fieldset[' . $type . '][hours]';
+    $post[$field] = 1.1;
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('is not a valid number'), t('Form submitted: invalid hours field.'));
+    $post[$field] = 'a';
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('must be a number.'), t('Form submitted: invalid hours field.'));
+    $post[$field] = '-1';
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('must be higher or equal to 0'), t('Form submitted: invalid hours field.'));
+    $post[$field] = '8761';
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $this->assertText(t('must be below or equal'), t('Form submitted: invalid hours field.'));
+
+    // Check valid hours field validation and that it saved in the variables.
+    // Check valid email validation and if it saved.
+    $post[$field] = '10';
+    $post['fieldset[email]'] = $this->randomName() . '@' . $this->randomName() . '.drupal';
+    $this->drupalPost('admin/config/content/remove_nodes', $post, t('Submit'));
+    $saved_settings = variable_get('remove_nodes');
+    if ($saved_settings['email'] === $post['fieldset[email]']) {
+      $this->pass(t('Email field value saved.'));
+    }
+    else {
+      $this->fail(t('Email field value not saved.'));
+    }
+    // Get settings.
+    $saved_settings = variable_get('remove_nodes');
+    if ($saved_settings[$type]['hours'] === $post[$field]) {
+      $this->pass(t('Hours field value saved.'));
+    }
+    else {
+      $this->fail(t('Hours field value not saved.'));
+    }
+
+    // Pretend that cron has never been run.
+    variable_set('remove_nodes_cron_next_execution', 0);
+    // Create nodes.
+    $time = time() - $saved_settings[$type]['hours'] * (3600 + 2);
+    for ($count = 0; $count < 5; $count++) {
+      $node = $this->drupalCreateNode(['created' => $time, 'type' => $type]);
+      $this->assertTrue($node, 'Node of type ' . $node->type . ' and nid: ' . ' created.' . format_date($node->created, 'medium'));
+    }
+
+    // Run cron.
+    $this->cronRun();
+
+    // Verify that email was sent.
+    $this->assertTrue(count($this->drupalGetMails()), t('An email has been sent.'));
+  }
+}

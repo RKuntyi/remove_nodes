@@ -1,0 +1,13 @@
+<?php
+
+/**
+ * @file
+ * Install, update, and uninstall functions for the remove_nodes module.
+ */
+
+/**
+ * Set Cron to run every day.
+ */
+function remove_nodes_enable() {
+  variable_set('cron_safe_threshold', 86400);
+}
